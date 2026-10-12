@@ -1,0 +1,27 @@
+@startuml container
+!include <C4/C4_Container>
+
+title Доставка еды — контейнеры (C4, уровень 2)
+
+Person(client, "Клиент")
+Person_Ext(venueStaff, "Сотрудник заведения")
+
+System_Boundary(platform, "Доставка еды") {
+  Container(api, "API-сервис", "Go, chi", "Публичный и партнёрский HTTP API. Модульный монолит: catalog, order, partner, integration — общая кодовая база, жёсткие границы модулей внутри")
+  Container(outbox, "Outbox-воркер", "Go, горутина внутри процесса api", "Забирает неотправленные события из outbox_events и доставляет их вебхуком. Не отдельный процесс — общий бинарник с API, отдельный жизненный цикл")
+  ContainerDb(db, "PostgreSQL", "PostgreSQL 16", "Единая база: каталог, заказы, партнёры, идемпотентность, outbox_events")
+}
+
+System_Boundary(venue, "venue-pasta-roma") {
+  Container(venueApp, "Сервис-заведение", "Go, отдельный go.mod", "Эмулятор интегрированного ресторана. Ноль импортов из internal/ платформы — общается только через сгенерированный из partner.yaml клиент")
+}
+
+Rel(client, api, "GET/POST/PATCH/DELETE", "HTTPS, JSON, X-Client-Id")
+Rel(venueStaff, api, "GET/POST/PATCH", "HTTPS, JSON, X-Api-Key")
+Rel(api, db, "Читает/пишет", "pgx, SQL")
+Rel(outbox, db, "Забирает due-события (FOR UPDATE SKIP LOCKED)", "pgx, SQL")
+Rel(outbox, venueApp, "POST /webhooks/orders", "HTTPS, HMAC-SHA256 в X-Signature")
+Rel(venueApp, api, "Синхронизация меню/остатков, приём/отклонение заказа, поллинг новых заказов", "HTTPS, партнёрский API, сгенерированный клиент")
+
+SHOW_LEGEND()
+@enduml

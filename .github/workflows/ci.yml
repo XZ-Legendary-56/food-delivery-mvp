@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+
+jobs:
+  lint:
+    name: lint (${{ matrix.module.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - dir: .
+            name: food-delivery-mvp
+          - dir: external/venue-pasta-roma
+            name: venue-pasta-roma
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ${{ matrix.module.dir }}
+          args: --build-tags=integration
+
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - run: make test
+
+  test-integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - run: make test-integration
+
+  generate-check:
+    name: generated code is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - run: make generate
+      - name: fail if make generate produced a diff
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "generated code is stale — run 'make generate' locally and commit the result:"
+            git status --porcelain
+            git diff
+            exit 1
+          fi

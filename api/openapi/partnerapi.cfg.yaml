@@ -1,0 +1,12 @@
+# oapi-codegen config for the partner API. Regenerate with `make generate`
+# after any change to partner.yaml — internal/generated/partnerapi is
+# machine-written, never edit it by hand.
+package: partnerapi
+output: internal/generated/partnerapi/partnerapi.gen.go
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: false

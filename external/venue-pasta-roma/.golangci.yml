@@ -1,0 +1,70 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - depguard
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - rowserrcheck
+    - sloglint
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        main:
+          files:
+            - '**/*.go'
+          deny:
+            - pkg: food-delivery-mvp
+              desc: venue-pasta-roma is a standalone module that emulates an external partner system; it must not depend on the platform module (docs/PLAN.md 8.1)
+    gosec:
+      excludes:
+        - G104
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - internal/generated
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - internal/generated
+      - third_party$
+      - builtin$
+      - examples$

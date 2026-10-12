@@ -1,0 +1,879 @@
+openapi: 3.0.3
+info:
+  title: Food Delivery MVP — Partner API
+  description: >
+    API for venues integrated with the platform: menu management,
+    availability, rescue offers and order fulfillment. Access is restricted to
+    venues that already hold a static API key (X-Api-Key), issued out of band
+    via seed data. This is partner access control, not end-user
+    authentication, so it does not conflict with customers staying
+    anonymous.
+  version: "0.1.0"
+servers:
+  # See public.yaml's servers comment: absolute on purpose, for Swagger UI
+  # running on its own port.
+  - url: http://localhost:8080/api/v1/partner
+tags:
+  - name: venue
+  - name: menu
+  - name: rescue-offers
+  - name: orders
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /venue:
+    get:
+      tags: [venue]
+      operationId: getPartnerVenue
+      summary: Own venue profile
+      responses:
+        "200":
+          description: Venue profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerVenue"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [venue]
+      operationId: updatePartnerVenue
+      summary: Update accepting_orders, minimum order amount, schedule, webhook URL
+      description: >
+        Every field is optional; only fields present in the body are changed.
+        Setting webhookUrl for the first time, or changing it, makes the
+        server generate a new HMAC signing secret, returned once in
+        webhookSecret. GET /venue never shows it again — store it when you get it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePartnerVenueRequest"
+      responses:
+        "200":
+          description: Updated venue profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerVenueWithSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /menu:
+    put:
+      tags: [menu]
+      operationId: syncMenu
+      summary: Full menu sync — upsert categories and items in one request
+      description: >
+        Intended for integrated venues whose menu lives in their own system.
+        Categories are matched by name within this venue (menu_categories has
+        no external id of its own); items are matched by externalId within
+        this venue. Items and categories from a previous sync that are absent
+        from this one are left untouched, not deleted — removing something is
+        a deliberate, separate action.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MenuSyncRequest"
+      responses:
+        "200":
+          description: Full menu after the sync.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerMenu"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /menu/items:
+    post:
+      tags: [menu]
+      operationId: createMenuItem
+      summary: Add one item to an existing category
+      description: >
+        For incremental, manual menu management. The category must already
+        exist — categories themselves are only created through PUT /menu.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMenuItemRequest"
+      responses:
+        "201":
+          description: Created item.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerMenuItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /menu/items/{itemId}:
+    parameters:
+      - $ref: "#/components/parameters/ItemId"
+    patch:
+      tags: [menu]
+      operationId: updateMenuItem
+      summary: Change an item's structural fields
+      description: >
+        Structural fields only — name, description, price, category, cooking
+        time. Availability and stock are deliberately not here: they change
+        minute to minute and go through POST /menu/availability instead, so
+        the fast-changing part of the menu never gets mixed with the slow one
+        (see the caching section of the README).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMenuItemRequest"
+      responses:
+        "200":
+          description: Updated item.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerMenuItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /menu/availability:
+    post:
+      tags: [menu]
+      operationId: updateAvailability
+      summary: Bulk stop-list and stock update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAvailabilityRequest"
+      responses:
+        "200":
+          description: Updated availability, one entry per requested item.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateAvailabilityResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /rescue-offers:
+    get:
+      tags: [rescue-offers]
+      operationId: listPartnerRescueOffers
+      summary: Own rescue offers
+      parameters:
+        - name: activeOnly
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Rescue offers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RescueOffer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [rescue-offers]
+      operationId: createRescueOffer
+      summary: Create a rescue offer for one menu item
+      description: >
+        The database rejects two live offers on the same item with
+        overlapping windows (an exclusion constraint), so RESCUE_OFFER_OVERLAP
+        is reliable even under concurrent requests, not just a pre-check.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRescueOfferRequest"
+      responses:
+        "201":
+          description: Created offer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RescueOffer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /rescue-offers/{offerId}:
+    parameters:
+      - name: offerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [rescue-offers]
+      operationId: cancelRescueOffer
+      summary: Cancel a rescue offer early
+      responses:
+        "204":
+          description: Cancelled.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /orders:
+    get:
+      tags: [orders]
+      operationId: listPartnerOrders
+      summary: Poll for orders
+      description: >
+        A backstop for the outgoing webhook, which can fail to arrive.
+        A venue that only relies on the webhook can still find its orders
+        here.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - name: since
+          in: query
+          description: Return only orders created or updated at or after this time.
+          schema:
+            type: string
+            format: date-time
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Orders, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PartnerOrder"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /orders/{orderId}/accept:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      tags: [orders]
+      operationId: acceptOrder
+      summary: Accept an order and give an ETA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptOrderRequest"
+      responses:
+        "200":
+          description: Confirmed order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerOrder"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /orders/{orderId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      tags: [orders]
+      operationId: rejectOrder
+      summary: Reject an order with a reason
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectOrderRequest"
+      responses:
+        "200":
+          description: Rejected order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerOrder"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /orders/{orderId}/status:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      tags: [orders]
+      operationId: advanceOrderStatus
+      summary: Move an order to the next status
+      description: >
+        Allowed transitions are enforced by an explicit state-machine table on
+        the server, not a chain of ifs. A disallowed transition (e.g. jumping
+        from cooking to delivered) fails with ORDER_INVALID_STATE_TRANSITION.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdvanceOrderStatusRequest"
+      responses:
+        "200":
+          description: Updated order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerOrder"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+
+  parameters:
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+  responses:
+    Unauthorized:
+      description: Missing, unknown or revoked API key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found, or it belongs to another venue.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Business conflict, see the error code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnprocessableEntity:
+      description: Request is well-formed but violates a business rule.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Money:
+      type: object
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount in minor units (kopecks). Always an integer, never a float.
+        currency:
+          type: string
+          example: RUB
+
+    ErrorCode:
+      type: string
+      description: >
+        UNAUTHORIZED, VALIDATION_ERROR, NOT_FOUND and INTERNAL_ERROR cover the
+        usual REST cases; the rescue and order-transition codes map 1:1 to the
+        conflict scenarios in docs/PLAN.md.
+      enum:
+        - RESCUE_OFFER_OVERLAP
+        - RESCUE_INVALID_WINDOW
+        - RESCUE_INVALID_DISCOUNT
+        - ORDER_INVALID_STATE_TRANSITION
+        - VALIDATION_ERROR
+        - UNAUTHORIZED
+        - NOT_FOUND
+        - INTERNAL_ERROR
+
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        requestId:
+          type: string
+
+    VenueScheduleEntry:
+      type: object
+      required: [weekday, opensAt, closesAt]
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Monday .. 6 = Sunday.
+        opensAt:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$'
+          example: "09:00:00"
+        closesAt:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$'
+          example: "22:00:00"
+
+    PartnerVenue:
+      type: object
+      required: [id, name, cuisine, minOrderAmount, acceptingOrders, menuVersion, schedule]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        cuisine:
+          type: string
+        minOrderAmount:
+          $ref: "#/components/schemas/Money"
+        acceptingOrders:
+          type: boolean
+        webhookUrl:
+          type: string
+          format: uri
+          nullable: true
+        menuVersion:
+          type: integer
+          format: int64
+          description: Bumped on every menu, price, availability or rescue-offer change. Backs the ETag on GET /venues/{venueId}/menu.
+        schedule:
+          type: array
+          items:
+            $ref: "#/components/schemas/VenueScheduleEntry"
+
+    PartnerVenueWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/PartnerVenue"
+        - type: object
+          properties:
+            webhookSecret:
+              type: string
+              nullable: true
+              description: Present only right after webhookUrl was set or changed. Not returned again.
+
+    UpdatePartnerVenueRequest:
+      type: object
+      properties:
+        description:
+          type: string
+        acceptingOrders:
+          type: boolean
+        minOrderAmountMinor:
+          type: integer
+          format: int64
+          minimum: 0
+        webhookUrl:
+          type: string
+          format: uri
+        schedule:
+          type: array
+          description: Replaces the whole weekly schedule when present.
+          items:
+            $ref: "#/components/schemas/VenueScheduleEntry"
+
+    PartnerMenuItem:
+      type: object
+      required: [id, categoryId, name, price, isAvailable, cookingTimeMinutes, source]
+      properties:
+        id:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          $ref: "#/components/schemas/Money"
+        isAvailable:
+          type: boolean
+        stockQty:
+          type: integer
+          nullable: true
+          description: Null means unlimited.
+        cookingTimeMinutes:
+          type: integer
+        source:
+          type: string
+          enum: [platform, integration]
+        externalId:
+          type: string
+          nullable: true
+
+    PartnerMenuCategory:
+      type: object
+      required: [id, name, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        position:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartnerMenuItem"
+
+    PartnerMenu:
+      type: object
+      required: [menuVersion, categories]
+      properties:
+        menuVersion:
+          type: integer
+          format: int64
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartnerMenuCategory"
+
+    MenuSyncItem:
+      type: object
+      required: [externalId, name, priceMinor]
+      properties:
+        externalId:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        description:
+          type: string
+        priceMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        cookingTimeMinutes:
+          type: integer
+          minimum: 1
+          default: 15
+        isAvailable:
+          type: boolean
+          default: true
+        stockQty:
+          type: integer
+          nullable: true
+
+    MenuSyncCategory:
+      type: object
+      required: [name, items]
+      properties:
+        name:
+          type: string
+        position:
+          type: integer
+          default: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuSyncItem"
+
+    MenuSyncRequest:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuSyncCategory"
+
+    CreateMenuItemRequest:
+      type: object
+      required: [categoryId, name, priceMinor]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        priceMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        cookingTimeMinutes:
+          type: integer
+          minimum: 1
+          default: 15
+        stockQty:
+          type: integer
+          nullable: true
+        externalId:
+          type: string
+          nullable: true
+
+    UpdateMenuItemRequest:
+      type: object
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        priceMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        cookingTimeMinutes:
+          type: integer
+          minimum: 1
+
+    AvailabilityUpdate:
+      type: object
+      required: [menuItemId]
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        isAvailable:
+          type: boolean
+        stockQty:
+          type: integer
+          nullable: true
+
+    UpdateAvailabilityRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AvailabilityUpdate"
+
+    # Named Result, not Response: oapi-codegen's client mode auto-generates a
+    # wrapper type per operation named <operationId>Response — for the
+    # updateAvailability operation that's UpdateAvailabilityResponse, which
+    # collided with this schema's Go type when external/venue-pasta-roma's
+    # client was generated (two types, same name, same package: a compile
+    # error). Every other schema in this file happens to end in a noun other
+    # than "Response", so this is the one rename that was actually needed.
+    UpdateAvailabilityResult:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityUpdate"
+
+    RescueOffer:
+      type: object
+      required: [id, menuItemId, discountPercent, initialQuantity, remainingQuantity, startsAt, endsAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        menuItemId:
+          type: string
+          format: uuid
+        discountPercent:
+          type: integer
+          minimum: 1
+          maximum: 90
+        initialQuantity:
+          type: integer
+          minimum: 1
+        remainingQuantity:
+          type: integer
+          minimum: 0
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateRescueOfferRequest:
+      type: object
+      required: [menuItemId, discountPercent, quantity, startsAt, endsAt]
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        discountPercent:
+          type: integer
+          minimum: 1
+          maximum: 90
+        quantity:
+          type: integer
+          minimum: 1
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+
+    OrderStatus:
+      type: string
+      enum: [created, confirmed, cooking, ready, delivering, delivered, rejected, cancelled]
+
+    PartnerOrderItem:
+      type: object
+      required: [menuItemId, name, unitPrice, quantity]
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+        quantity:
+          type: integer
+        rescueOfferId:
+          type: string
+          format: uuid
+          nullable: true
+
+    PartnerOrder:
+      type: object
+      required: [id, status, items, total, deliveryAddress, customerPhone, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartnerOrderItem"
+        total:
+          $ref: "#/components/schemas/Money"
+        deliveryAddress:
+          type: string
+        customerPhone:
+          type: string
+        comment:
+          type: string
+        etaMinutes:
+          type: integer
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        externalOrderId:
+          type: string
+          nullable: true
+          description: This order's identifier in the venue's own system, if it set one when accepting.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AcceptOrderRequest:
+      type: object
+      required: [etaMinutes]
+      properties:
+        etaMinutes:
+          type: integer
+          minimum: 1
+        externalOrderId:
+          type: string
+
+    RejectOrderRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+
+    AdvanceOrderStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [cooking, ready, delivering, delivered]

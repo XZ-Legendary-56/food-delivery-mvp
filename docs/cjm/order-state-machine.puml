@@ -1,0 +1,39 @@
+@startuml order-state-machine
+title Стейт-машина заказа (docs/PLAN.md 5.4) — internal/domain/order/status.go
+
+[*] --> created
+
+created --> confirmed : venue accepts
+created --> rejected : venue rejects (+ reason)
+created --> cancelled : customer cancels
+
+confirmed --> cooking : venue starts cooking
+confirmed --> cancelled : customer cancels
+
+cooking --> ready
+ready --> delivering
+delivering --> delivered
+
+rejected --> [*]
+cancelled --> [*]
+delivered --> [*]
+
+note right of cancelled
+  Разрешено только из created и confirmed —
+  "только до того, как заведение начало готовить".
+  Любой другой переход отклоняется явной таблицей
+  переходов, а не проверкой if/switch:
+  ORDER_INVALID_STATE_TRANSITION (409).
+end note
+
+note right of delivered
+  delivered, rejected, cancelled — терминальные
+  статусы: строки для них в таблице переходов
+  нет вообще, а не "нет разрешённых переходов".
+end note
+
+note as N1
+  Каждый переход пишется в order_status_history:
+  from_status, to_status, actor (customer/venue/system), created_at.
+end note
+@enduml

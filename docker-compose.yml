@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-food_delivery}
+      POSTGRES_USER: ${DB_USER:-food_delivery}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-food_delivery}
+    ports:
+      # Host-side 5434: 5432/5433 are commonly already taken by native
+      # Postgres installs. Containers still reach this service at
+      # postgres:5432 over the compose network, so only host tools
+      # (make migrate-up, psql) need to use 5434.
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-food_delivery} -d ${DB_NAME:-food_delivery}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    environment: &db_env
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-food_delivery}
+      DB_PASSWORD: ${DB_PASSWORD:-food_delivery}
+      DB_NAME: ${DB_NAME:-food_delivery}
+      DB_SSLMODE: disable
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: seed
+    environment: *db_env
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      <<: *db_env
+      HTTP_PORT: "8080"
+      LOG_LEVEL: info
+      SHUTDOWN_TIMEOUT: 10s
+    ports:
+      - "8080:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      # venue-pasta-roma needs more than "the container started" — it needs
+      # /readyz to actually answer, which only happens once migrations and
+      # seed have landed. This is what lets its own depends_on below express
+      # docs/PLAN.md 8's "стартует после того, как api отвечает на /readyz"
+      # as a Compose-level guarantee, not just the app's own internal retry
+      # loop (see external/venue-pasta-roma's bootstrap package, which
+      # polls the same endpoint again anyway — belt and suspenders, since a
+      # healthcheck's own interval can lag the actual moment readiness
+      # flips).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  swagger-ui:
+    # Official image, not a hand-rolled one: docs/PLAN.md just asks for a way
+    # to browse and try the two specs, and this does that with zero code of
+    # our own. URLS (plural — the image's own env var name) lets one
+    # instance serve both specs with a dropdown to switch between them,
+    # instead of running two containers for two static files.
+    image: swaggerapi/swagger-ui:v5.17.14
+    environment:
+      URLS: '[{"url": "/specs/public.yaml", "name": "Public API"}, {"url": "/specs/partner.yaml", "name": "Partner API"}]'
+    volumes:
+      - ./api/openapi/public.yaml:/usr/share/nginx/html/specs/public.yaml:ro
+      - ./api/openapi/partner.yaml:/usr/share/nginx/html/specs/partner.yaml:ro
+    ports:
+      - "8081:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  venue-pasta-roma:
+    build:
+      context: ./external/venue-pasta-roma
+      dockerfile: Dockerfile
+    environment:
+      PLATFORM_BASE_URL: http://api:8080
+      # The API key belongs to the Pasta Roma partner from cmd/seed —
+      # venues.source='integration' for exactly this venue, and its menu is
+      # deliberately left empty by the seed (see seed.sql's own comment):
+      # this service is what's expected to fill it in, over the same
+      # partner API a real integrator would use.
+      PARTNER_API_KEY: demo_pasta_roma_2026
+      SELF_BASE_URL: http://venue-pasta-roma:8090
+      HTTP_PORT: "8090"
+      LOG_LEVEL: info
+    ports:
+      - "8090:8090"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

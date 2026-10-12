@@ -1,0 +1,42 @@
+@startuml target-microservices
+!include <C4/C4_Container>
+
+title Доставка еды — целевая схема после разрезания на сервисы (C4, уровень 2, гипотетический)
+
+Person(client, "Клиент")
+Person_Ext(venueStaff, "Сотрудник заведения")
+
+System_Boundary(orderSys, "order-service") {
+  Container(orderApi, "Order API", "Go", "Корзина, оформление заказа, стейт-машина. Резервирует остаток сагой, а не локальной транзакцией с catalog-service")
+  ContainerDb(orderDb, "PostgreSQL (order)", "PostgreSQL", "orders, order_items, carts, idempotency_keys, order_outbox")
+}
+
+System_Boundary(catalogSys, "catalog-service") {
+  Container(catalogApi, "Catalog API", "Go", "Заведения, меню, остатки, акции «спасение остатков». Отвечает на резервирование/освобождение остатка")
+  ContainerDb(catalogDb, "PostgreSQL (catalog)", "PostgreSQL", "venues, menu_items, rescue_offers")
+}
+
+System_Boundary(partnerSys, "partner-service") {
+  Container(partnerApi, "Partner API", "Go", "Партнёры, API-ключи, партнёрский контур ручек — вынесен последним, у него меньше всего связности с горячим путём заказа")
+  ContainerDb(partnerDb, "PostgreSQL (partner)", "PostgreSQL", "partners, partner_api_keys")
+}
+
+System_Boundary(integrationSys, "integration-service") {
+  Container(integrationApi, "Integration Worker", "Go", "Тот же outbox-паттерн, что и сейчас, но за отдельным HTTP-фасадом. Первый кандидат на выделение: у него уже нет транзакционной связности с остальными — граница проходит по outbox")
+}
+
+ContainerQueue(broker, "Брокер сообщений", "например Kafka", "Появляется только здесь: второй потребитель событий оправдывает его. Раздел README «События и брокер сообщений»")
+Container_Ext(venueApp, "venue-pasta-roma", "без изменений")
+
+Rel(client, orderApi, "HTTPS")
+Rel(venueStaff, partnerApi, "HTTPS")
+Rel(orderApi, orderDb, "SQL")
+Rel(orderApi, catalogApi, "Резерв/подтверждение/освобождение остатка (сага)", "HTTPS/gRPC")
+Rel(catalogApi, catalogDb, "SQL")
+Rel(partnerApi, partnerDb, "SQL")
+Rel(orderApi, broker, "publish order.created/order.cancelled", "EventPublisher")
+Rel(integrationApi, broker, "consume", "")
+Rel(integrationApi, venueApp, "POST /webhooks/orders", "HTTPS")
+
+SHOW_LEGEND()
+@enduml

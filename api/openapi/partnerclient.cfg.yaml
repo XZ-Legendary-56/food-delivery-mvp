@@ -1,0 +1,12 @@
+# oapi-codegen config for a generated CLIENT of the partner API. This is
+# what external/venue-pasta-roma uses to talk to the platform — see its own
+# README section on why: the point of that module is to behave exactly like
+# a third-party integrator who only has this spec, never internal/ code.
+# Regenerate with `make generate` after any change to partner.yaml.
+package: partnerclient
+output: external/venue-pasta-roma/internal/generated/partnerclient/client.gen.go
+generate:
+  models: true
+  client: true
+output-options:
+  skip-prune: false

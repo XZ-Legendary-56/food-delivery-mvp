@@ -1,0 +1,783 @@
+openapi: 3.0.3
+info:
+  title: Food Delivery MVP — Public API
+  description: >
+    Client-facing API for the platform: browsing venues and menus, managing a
+    cart, and placing orders. The customer is anonymous — identity is a
+    client-generated UUID sent in the X-Client-Id header. There is no
+    registration, no password, no JWT.
+  version: "0.1.0"
+servers:
+  # Absolute, not relative: Swagger UI resolves a relative server URL
+  # against its OWN page origin, and it runs in a separate container on a
+  # separate port (docker-compose.yml, swagger-ui service) from the API
+  # itself — a relative /api/v1 would make "Try it out" call swagger-ui's
+  # own nginx instead of the API. oapi-codegen ignores this field entirely
+  # (internal/adapter/http/router.go mounts the real path itself), so this
+  # only affects tooling, never the running server's actual routing.
+  - url: http://localhost:8080/api/v1
+tags:
+  - name: venues
+  - name: rescue
+  - name: cart
+  - name: orders
+
+paths:
+  /venues:
+    get:
+      tags: [venues]
+      operationId: listVenues
+      summary: List venues with filters and cursor pagination
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: cuisine
+          in: query
+          description: Exact match on cuisine type.
+          schema:
+            type: string
+        - name: isOpen
+          in: query
+          description: When true, return only venues that are open right now and accepting orders.
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Case-insensitive search by venue name prefix.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of venues.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueListPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /venues/{venueId}:
+    parameters:
+      - $ref: "#/components/parameters/VenueId"
+    get:
+      tags: [venues]
+      operationId: getVenue
+      summary: Venue card — details and weekly schedule
+      responses:
+        "200":
+          description: Venue details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /venues/{venueId}/menu:
+    parameters:
+      - $ref: "#/components/parameters/VenueId"
+    get:
+      tags: [venues]
+      operationId: getVenueMenu
+      summary: Venue menu with live availability and rescue prices
+      description: >
+        Supports conditional requests. The ETag is derived from venue_id and
+        menu_version (see the caching section of the README). Send
+        If-None-Match with a previously received ETag to get 304 Not Modified
+        without a body when the menu has not changed.
+      parameters:
+        - name: If-None-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full menu, grouped by category.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Menu"
+        "304":
+          description: Menu has not changed since the given ETag.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /rescue:
+    get:
+      tags: [rescue]
+      operationId: listRescueOffers
+      summary: Cross-venue "rescue" feed, soonest-closing offer first
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Page of currently active rescue offers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RescueOfferListPage"
+
+  /cart:
+    get:
+      tags: [cart]
+      operationId: getCart
+      summary: Get the current client's cart
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        "200":
+          description: Cart, empty if the client does not have one yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+    delete:
+      tags: [cart]
+      operationId: clearCart
+      summary: Empty the cart
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        "204":
+          description: Cart cleared.
+
+  /cart/items:
+    post:
+      tags: [cart]
+      operationId: addCartItem
+      summary: Add a menu item to the cart
+      description: >
+        Adding an item from a venue other than the cart's current venue fails
+        with CART_VENUE_MISMATCH; the client is expected to offer clearing the
+        cart first. Availability is checked here too (the "soft" check), so
+        the user learns about a problem immediately — but the authoritative
+        check happens again inside the order transaction, because stock can
+        change in the time between adding to the cart and checking out.
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddCartItemRequest"
+      responses:
+        "200":
+          description: Updated cart.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /cart/items/{itemId}:
+    parameters:
+      - name: itemId
+        in: path
+        required: true
+        description: cart_items.id, as returned in Cart.items.
+        schema:
+          type: string
+          format: uuid
+      - $ref: "#/components/parameters/ClientId"
+    patch:
+      tags: [cart]
+      operationId: updateCartItem
+      summary: Change the quantity of a cart line
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCartItemRequest"
+      responses:
+        "200":
+          description: Updated cart.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [cart]
+      operationId: removeCartItem
+      summary: Remove a line from the cart
+      responses:
+        "200":
+          description: Updated cart.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /orders:
+    post:
+      tags: [orders]
+      operationId: createOrder
+      summary: Place an order from the current cart
+      description: >
+        Runs the hard availability check and the stock decrement inside a
+        single transaction. Repeating the same Idempotency-Key with the same
+        request body returns the original order again (200) instead of
+        creating a duplicate. The same key with a different body is a client
+        bug and fails with IDEMPOTENCY_KEY_CONFLICT. An empty cart fails with
+        CART_EMPTY.
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "200":
+          description: Idempotency-Key was already used with the same body — returns the original order, no duplicate created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /orders/{orderId}:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/ClientId"
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: Order status and its full transition history
+      responses:
+        "200":
+          description: Order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /orders/{orderId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/ClientId"
+    post:
+      tags: [orders]
+      operationId: cancelOrder
+      summary: Cancel an order before the venue starts cooking it
+      description: >
+        Allowed from created or confirmed only. Once the venue has moved the
+        order to cooking, cancellation fails with
+        ORDER_INVALID_STATE_TRANSITION.
+      responses:
+        "200":
+          description: Cancelled order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+components:
+  parameters:
+    ClientId:
+      name: X-Client-Id
+      in: header
+      required: true
+      description: >
+        Anonymous customer identity, generated by the client itself. No
+        registration or authentication is involved.
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+    VenueId:
+      name: venueId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque pagination cursor taken from a previous page's nextCursor.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Business conflict, see the error code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnprocessableEntity:
+      description: Request is well-formed but violates a business rule.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Money:
+      type: object
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount in minor units (kopecks). Always an integer, never a float.
+        currency:
+          type: string
+          example: RUB
+
+    ErrorCode:
+      type: string
+      description: >
+        VALIDATION_ERROR, NOT_FOUND and INTERNAL_ERROR cover the usual REST
+        cases and are not part of the documented conflict scenarios; the rest
+        map 1:1 to the conflict scenarios in docs/PLAN.md.
+      enum:
+        - VENUE_CLOSED
+        - VENUE_NOT_ACCEPTING_ORDERS
+        - ITEM_UNAVAILABLE
+        - INSUFFICIENT_STOCK
+        - PRICE_CHANGED
+        - MIN_ORDER_AMOUNT_NOT_REACHED
+        - CART_VENUE_MISMATCH
+        - CART_EMPTY
+        - IDEMPOTENCY_KEY_CONFLICT
+        - RESCUE_OFFER_EXPIRED
+        - ORDER_INVALID_STATE_TRANSITION
+        - VALIDATION_ERROR
+        - NOT_FOUND
+        - INTERNAL_ERROR
+
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+        details:
+          type: array
+          description: Shape depends on the error code, e.g. per-item shortages or an old/new price pair.
+          items:
+            type: object
+            additionalProperties: true
+        requestId:
+          type: string
+          description: Correlates the response with server logs.
+
+    VenueScheduleEntry:
+      type: object
+      required: [weekday, opensAt, closesAt]
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Monday .. 6 = Sunday.
+        opensAt:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$'
+          example: "09:00:00"
+        closesAt:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$'
+          example: "22:00:00"
+
+    Venue:
+      type: object
+      required: [id, name, cuisine, minOrderAmount, acceptingOrders, isOpen]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        cuisine:
+          type: string
+        minOrderAmount:
+          $ref: "#/components/schemas/Money"
+        acceptingOrders:
+          type: boolean
+        isOpen:
+          type: boolean
+          description: Computed from the current time and the weekly schedule, not stored.
+        nextOpensAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when the venue is currently closed by schedule.
+
+    VenueDetail:
+      allOf:
+        - $ref: "#/components/schemas/Venue"
+        - type: object
+          required: [schedule]
+          properties:
+            schedule:
+              type: array
+              items:
+                $ref: "#/components/schemas/VenueScheduleEntry"
+
+    VenueListPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Venue"
+        nextCursor:
+          type: string
+          nullable: true
+
+    RescueOfferSummary:
+      type: object
+      required: [id, discountPercent, priceBefore, priceAfter, remainingQuantity, endsAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        discountPercent:
+          type: integer
+          minimum: 1
+          maximum: 90
+        priceBefore:
+          $ref: "#/components/schemas/Money"
+        priceAfter:
+          $ref: "#/components/schemas/Money"
+        remainingQuantity:
+          type: integer
+          minimum: 0
+        endsAt:
+          type: string
+          format: date-time
+
+    MenuItem:
+      type: object
+      required: [id, categoryId, name, price, isAvailable]
+      properties:
+        id:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          $ref: "#/components/schemas/Money"
+        isAvailable:
+          type: boolean
+          description: False when the item is stop-listed or stockQty has reached zero. Shown, not hidden.
+        stockQty:
+          type: integer
+          nullable: true
+          description: Null means unlimited.
+        rescueOffer:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RescueOfferSummary"
+
+    MenuCategory:
+      type: object
+      required: [id, name, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        position:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuItem"
+
+    Menu:
+      type: object
+      required: [venueId, menuVersion, categories]
+      properties:
+        venueId:
+          type: string
+          format: uuid
+        menuVersion:
+          type: integer
+          format: int64
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuCategory"
+
+    RescueOfferFeedEntry:
+      allOf:
+        - $ref: "#/components/schemas/RescueOfferSummary"
+        - type: object
+          required: [venueId, venueName, menuItemId, menuItemName]
+          properties:
+            venueId:
+              type: string
+              format: uuid
+            venueName:
+              type: string
+            menuItemId:
+              type: string
+              format: uuid
+            menuItemName:
+              type: string
+
+    RescueOfferListPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RescueOfferFeedEntry"
+        nextCursor:
+          type: string
+          nullable: true
+
+    CartItem:
+      type: object
+      required: [id, menuItemId, name, unitPrice, quantity, lineTotal, isAvailable]
+      properties:
+        id:
+          type: string
+          format: uuid
+        menuItemId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        unitPrice:
+          description: Price snapshot taken when the item was added to the cart.
+          allOf:
+            - $ref: "#/components/schemas/Money"
+        quantity:
+          type: integer
+          minimum: 1
+        lineTotal:
+          $ref: "#/components/schemas/Money"
+        isAvailable:
+          type: boolean
+          description: Live soft-check result — may have changed since the item was added.
+        rescueOffer:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RescueOfferSummary"
+
+    Cart:
+      type: object
+      required: [clientId, items, subtotal]
+      properties:
+        clientId:
+          type: string
+          format: uuid
+        venueId:
+          type: string
+          format: uuid
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CartItem"
+        subtotal:
+          $ref: "#/components/schemas/Money"
+
+    AddCartItemRequest:
+      type: object
+      required: [menuItemId, quantity]
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+
+    UpdateCartItemRequest:
+      type: object
+      required: [quantity]
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+
+    CreateOrderRequest:
+      type: object
+      required: [deliveryAddress, customerPhone]
+      properties:
+        deliveryAddress:
+          type: string
+          minLength: 1
+        customerPhone:
+          type: string
+          minLength: 1
+        comment:
+          type: string
+
+    OrderStatus:
+      type: string
+      enum: [created, confirmed, cooking, ready, delivering, delivered, rejected, cancelled]
+
+    OrderItem:
+      type: object
+      required: [menuItemId, name, unitPrice, quantity, lineTotal]
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+        quantity:
+          type: integer
+        lineTotal:
+          $ref: "#/components/schemas/Money"
+        rescueOfferId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set when this line was bought under a rescue offer. Null means full price.
+
+    OrderStatusHistoryEntry:
+      type: object
+      required: [toStatus, actor, createdAt]
+      properties:
+        fromStatus:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/OrderStatus"
+        toStatus:
+          $ref: "#/components/schemas/OrderStatus"
+        actor:
+          type: string
+          enum: [customer, venue, system]
+        createdAt:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required:
+        - id
+        - venueId
+        - status
+        - items
+        - total
+        - deliveryAddress
+        - customerPhone
+        - createdAt
+        - updatedAt
+        - statusHistory
+      properties:
+        id:
+          type: string
+          format: uuid
+        venueId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        total:
+          $ref: "#/components/schemas/Money"
+        deliveryAddress:
+          type: string
+        customerPhone:
+          type: string
+        comment:
+          type: string
+        etaMinutes:
+          type: integer
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        statusHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderStatusHistoryEntry"

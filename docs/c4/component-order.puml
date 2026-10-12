@@ -1,0 +1,37 @@
+@startuml component-order
+!include <C4/C4_Component>
+
+title Доставка еды — модуль заказов, изнутри API-сервиса (C4, уровень 3)
+
+Person(client, "Клиент")
+
+Container_Boundary(api, "API-сервис") {
+  Component(handlers, "HTTP-хендлеры", "internal/adapter/http/public", "Реализуют сгенерированный StrictServerInterface. Только маппинг запрос/ответ, никакой бизнес-логики")
+  Component(checkoutSvc, "CheckoutService", "internal/usecase/order", "Оформление заказа: идемпотентность, жёсткая проверка доступности, списание остатков и акций в одной транзакции")
+  Component(orderSvc, "order.Service", "internal/usecase/order", "Просмотр статуса и отмена заказа клиентом")
+  Component(cartSvc, "CartService", "internal/usecase/order", "Корзина: добавление/изменение/удаление позиций, мягкая проверка доступности")
+  Component(ports, "Порты", "internal/usecase/order/ports.go", "Интерфейсы Repository, OutboxRepository, VenueLookup, MenuItemLookup, RescueOfferRepository, IdempotencyRepository — объявлены юзкейсами, не адаптерами")
+  Component(stateMachine, "Стейт-машина заказа", "internal/domain/order", "Таблица допустимых переходов статусов + бизнес-инварианты (Order.Cancel и т.д.), без единой зависимости от SQL или HTTP")
+  Component(txManager, "TxManager", "internal/adapter/postgres", "Кладёт *pgx.Tx в context.Context; репозитории достают её оттуда, если она есть")
+  Component(orderRepo, "OrderRepository / CartRepository / ...", "internal/adapter/postgres", "Реализация портов на pgx: SELECT ... FOR UPDATE ORDER BY id при списании остатков")
+  Component(outboxEnqueue, "Запись в outbox", "internal/usecase/order/events.go", "newOrderCreatedEvent / newOrderCancelledEvent — строит событие в той же транзакции, что и запись заказа")
+}
+
+ContainerDb(db, "PostgreSQL")
+
+Rel(client, handlers, "HTTPS, JSON")
+Rel(handlers, checkoutSvc, "PlaceOrder")
+Rel(handlers, orderSvc, "GetOrder / CancelOrder")
+Rel(handlers, cartSvc, "AddItem / UpdateItem / RemoveItem")
+Rel(checkoutSvc, ports, "вызывает через интерфейс")
+Rel(orderSvc, ports, "вызывает через интерфейс")
+Rel(cartSvc, ports, "вызывает через интерфейс")
+Rel(checkoutSvc, stateMachine, "Order.Cancel, ValidateTransition")
+Rel(orderSvc, stateMachine, "Order.Cancel, ValidateTransition")
+Rel(checkoutSvc, outboxEnqueue, "в той же транзакции, что и orders.Create")
+Rel(ports, orderRepo, "реализуется адаптером (DI в router.go)")
+Rel(orderRepo, txManager, "достаёт транзакцию из context")
+Rel(orderRepo, db, "SQL, pgx")
+
+SHOW_LEGEND()
+@enduml

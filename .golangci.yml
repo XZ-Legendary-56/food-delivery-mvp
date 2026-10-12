@@ -1,0 +1,167 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - depguard
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - rowserrcheck
+    - sloglint
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        adapter-http-partner-isolation:
+          files:
+            - internal/adapter/http/partner/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/adapter/postgres
+              desc: adapter/http/partner must not depend on adapter/postgres (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/webhook
+              desc: adapter/http/partner must not depend on adapter/webhook (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/http/public
+              desc: adapter/http/partner must not depend on adapter/http/public (docs/PLAN.md 6.2)
+        adapter-http-public-isolation:
+          files:
+            - internal/adapter/http/public/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/adapter/postgres
+              desc: adapter/http/public must not depend on adapter/postgres (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/webhook
+              desc: adapter/http/public must not depend on adapter/webhook (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/http/partner
+              desc: adapter/http/public must not depend on adapter/http/partner (docs/PLAN.md 6.2)
+        adapter-postgres-isolation:
+          files:
+            - internal/adapter/postgres/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/adapter/webhook
+              desc: adapter/postgres must not depend on adapter/webhook (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/http
+              desc: adapter/postgres must not depend on adapter/http (docs/PLAN.md 6.2)
+        adapter-webhook-isolation:
+          files:
+            - internal/adapter/webhook/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/adapter/postgres
+              desc: adapter/webhook must not depend on adapter/postgres (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter/http
+              desc: adapter/webhook must not depend on adapter/http (docs/PLAN.md 6.2)
+        domain:
+          files:
+            - internal/domain/**/*.go
+          allow:
+            - $gostd
+            - github.com/google/uuid
+          deny:
+            - pkg: food-delivery-mvp/internal/usecase
+              desc: domain must not depend on usecase (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/adapter
+              desc: domain must not depend on adapter (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/generated
+              desc: domain must not depend on generated code (docs/PLAN.md 6.2)
+        no-venue-pasta-roma:
+          files:
+            - '**/*.go'
+          deny:
+            - pkg: venue-pasta-roma
+              desc: the platform must not depend on the separate venue-pasta-roma module (docs/PLAN.md 8.1)
+        usecase-catalog-isolation:
+          files:
+            - internal/usecase/catalog/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/usecase/order
+              desc: usecase/catalog must not depend on usecase/order (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/partner
+              desc: usecase/catalog must not depend on usecase/partner (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/outbox
+              desc: usecase/catalog must not depend on usecase/outbox (docs/PLAN.md 6.2)
+        usecase-no-adapter:
+          files:
+            - internal/usecase/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/adapter
+              desc: usecase must not depend on adapter (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/generated
+              desc: usecase must not depend on generated code (docs/PLAN.md 6.2)
+        usecase-order-isolation:
+          files:
+            - internal/usecase/order/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/usecase/catalog
+              desc: usecase/order must not depend on usecase/catalog (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/partner
+              desc: usecase/order must not depend on usecase/partner (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/outbox
+              desc: usecase/order must not depend on usecase/outbox (docs/PLAN.md 6.2)
+        usecase-outbox-isolation:
+          files:
+            - internal/usecase/outbox/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/usecase/catalog
+              desc: usecase/outbox must not depend on usecase/catalog (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/order
+              desc: usecase/outbox must not depend on usecase/order (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/partner
+              desc: usecase/outbox must not depend on usecase/partner (docs/PLAN.md 6.2)
+        usecase-partner-isolation:
+          files:
+            - internal/usecase/partner/**/*.go
+          deny:
+            - pkg: food-delivery-mvp/internal/usecase/catalog
+              desc: usecase/partner must not depend on usecase/catalog (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/order
+              desc: usecase/partner must not depend on usecase/order (docs/PLAN.md 6.2)
+            - pkg: food-delivery-mvp/internal/usecase/outbox
+              desc: usecase/partner must not depend on usecase/outbox (docs/PLAN.md 6.2)
+    gosec:
+      excludes:
+        - G104
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - internal/generated
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - internal/generated
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,190 @@
+@startuml erd
+title Доставка еды — схема базы данных
+
+hide circle
+skinparam linetype ortho
+skinparam roundcorner 8
+
+entity "partners" as partners {
+  * id : uuid <<PK>>
+  --
+  * name : text
+  * created_at : timestamptz
+}
+
+entity "partner_api_keys" as keys {
+  * id : uuid <<PK>>
+  --
+  * partner_id : uuid <<FK>>
+  * key_hash : text <<UQ>>
+  * label : text
+  revoked_at : timestamptz
+}
+
+entity "venues" as venues {
+  * id : uuid <<PK>>
+  --
+  * partner_id : uuid <<FK>>
+  * name : text
+  * cuisine : text
+  * min_order_amount_minor : bigint
+  * accepting_orders : bool
+  * menu_version : bigint
+  webhook_url : text
+  webhook_secret : text
+  * source : text
+  external_id : text
+}
+
+entity "venue_schedules" as schedules {
+  * id : uuid <<PK>>
+  --
+  * venue_id : uuid <<FK>>
+  * weekday : smallint
+  * opens_at : time
+  * closes_at : time
+}
+
+entity "menu_categories" as categories {
+  * id : uuid <<PK>>
+  --
+  * venue_id : uuid <<FK>>
+  * name : text
+  * position : int
+}
+
+entity "menu_items" as items {
+  * id : uuid <<PK>>
+  --
+  * venue_id : uuid <<FK>>
+  * category_id : uuid <<FK>>
+  * name : text
+  * price_minor : bigint
+  * is_available : bool
+  stock_qty : int
+  * cooking_time_minutes : int
+  * source : text
+  external_id : text
+}
+
+entity "rescue_offers" as rescue {
+  * id : uuid <<PK>>
+  --
+  * venue_id : uuid <<FK>>
+  * menu_item_id : uuid <<FK>>
+  * discount_percent : smallint
+  * initial_quantity : int
+  * remaining_quantity : int
+  * starts_at : timestamptz
+  * ends_at : timestamptz
+  cancelled_at : timestamptz
+}
+
+entity "carts" as carts {
+  * id : uuid <<PK>>
+  --
+  * client_id : uuid <<UQ>>
+  * venue_id : uuid <<FK>>
+}
+
+entity "cart_items" as cartitems {
+  * id : uuid <<PK>>
+  --
+  * cart_id : uuid <<FK>>
+  * menu_item_id : uuid <<FK>>
+  rescue_offer_id : uuid <<FK>>
+  * quantity : int
+  * price_minor_snapshot : bigint
+}
+
+entity "orders" as orders {
+  * id : uuid <<PK>>
+  --
+  * client_id : uuid
+  * venue_id : uuid <<FK>>
+  * status : text
+  * total_minor : bigint
+  * delivery_address : text
+  * customer_phone : text
+  eta_minutes : int
+  rejection_reason : text
+  external_order_id : text
+}
+
+entity "order_items" as orderitems {
+  * id : uuid <<PK>>
+  --
+  * order_id : uuid <<FK>>
+  * menu_item_id : uuid <<FK>>
+  rescue_offer_id : uuid <<FK>>
+  * name_snapshot : text
+  * unit_price_minor : bigint
+  * quantity : int
+}
+
+entity "order_status_history" as history {
+  * id : uuid <<PK>>
+  --
+  * order_id : uuid <<FK>>
+  from_status : text
+  * to_status : text
+  * actor : text
+  * created_at : timestamptz
+}
+
+entity "idempotency_keys" as idem {
+  * id : uuid <<PK>>
+  --
+  * client_id : uuid
+  * key : text
+  * request_hash : text
+  order_id : uuid <<FK>>
+  * expires_at : timestamptz
+}
+
+entity "outbox_events" as outbox {
+  * id : uuid <<PK>>
+  --
+  * aggregate_type : text
+  * aggregate_id : uuid
+  * event_type : text
+  * event_version : int
+  * payload : jsonb
+  * status : text
+  * attempts : int
+  * next_attempt_at : timestamptz
+  * occurred_at : timestamptz
+}
+
+partners   ||--o{ keys
+partners   ||--o{ venues
+venues     ||--o{ schedules
+venues     ||--o{ categories
+venues     ||--o{ items
+categories ||--o{ items
+items      ||--o{ rescue
+venues     ||--o{ rescue
+venues     ||--o{ carts
+carts      ||--o{ cartitems
+items      ||--o{ cartitems
+rescue     |o--o{ cartitems
+venues     ||--o{ orders
+orders     ||--o{ orderitems
+items      ||--o{ orderitems
+rescue     |o--o{ orderitems
+orders     ||--o{ history
+orders     |o--o{ idem
+
+note bottom of outbox
+  Не связан внешними ключами намеренно:
+  таблица переживает удаление агрегата,
+  событие остаётся самодостаточным.
+end note
+
+note right of items
+  stock_qty = NULL — количество не ограничено.
+  is_available = false — стоп-лист.
+  Это два разных механизма.
+end note
+
+@enduml

@@ -1,0 +1,12 @@
+# oapi-codegen config for the public API. Regenerate with `make generate`
+# after any change to public.yaml — internal/generated/publicapi is
+# machine-written, never edit it by hand.
+package: publicapi
+output: internal/generated/publicapi/publicapi.gen.go
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: false
